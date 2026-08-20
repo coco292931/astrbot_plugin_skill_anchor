@@ -6,9 +6,9 @@ skill_anchor —— Skill 隔离守卫插件
 - 非管理员/陌生人会话：只注入白名单 skill，防止敏感 skill 泄露
 
 注入格式与原生 build_skills_prompt（astrbot/core/skills/skill_manager.py）完全一致：
-固定 "## Skills" 引导语 + "### Available skills" 清单 + "### Skill rules" 7 条规则，
-注入位置为 system_prompt 末尾追加（同 astr_main_agent.py 的
-`req.system_prompt += f"\\n{build_skills_prompt(skills)}\\n"`）。
+固定 "## Skills" 引导语 + "### Available skills" 清单 + "### Skill rules" 7 条规则。
+注入位置：显式插入到 persona 部分之后（身份锚 → persona → skill 清单 → 工具相关），
+定位不到 persona 时回退到 system_prompt 末尾追加。
 """
 
 import json
@@ -45,6 +45,15 @@ SKILLS_CONFIG_FILENAME = "skills.json"
 
 _SKILL_NAME_RE = re.compile(r"^[\w.-]+$")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1F\x7F]")
+
+# persona 段落定位标记（用于把 skill 块显式插到 persona 之后）
+_PERSONA_START_RE = re.compile(r"^#\s*Persona(\s|$)|^##\s*你是谁", re.MULTILINE)
+# persona 结尾标记（persona 的收尾段落标题/语句，匹配整行）
+_PERSONA_END_RE = re.compile(r"^##\s*关于[^\n]*|关于你的身份", re.MULTILINE)
+# 任意 # 标题行（用于确定段落边界）
+_HEADING_RE = re.compile(r"^#+", re.MULTILINE)
+# 一级标题（'# ' 单井号，用于 '# Persona' 段落结束定位）
+_H1_RE = re.compile(r"^#[^#]", re.MULTILINE)
 
 
 # ----------------------------------------------------------------------
@@ -324,6 +333,56 @@ class SkillGuardPlugin(Star):
         return bool(user_id) and (user_id == admin_id)
 
     # ------------------------------------------------------------------
+    # 注入位置：显式插入到 persona 之后（身份锚 → persona → skill → 工具）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _find_persona_insert_pos(system_prompt: str) -> int | None:
+        """
+        定位 persona 部分结束后的插入位置；定位不到返回 None（回退末尾追加）。
+
+        策略 1：找 persona 结尾标记（'## 关于其他人' / '关于你的身份' 等，取最后一个），
+                插入到结尾标记段落之后（下一个 # 标题行之前）。
+        策略 2：找到 '# Persona' 段落但无结尾标记，插入到下一个一级标题（'# '）之前
+                （persona 内容用 '##' 子标题，一级标题属于其他段落）。
+        """
+        sp = system_prompt
+
+        # ---- 先确认 persona 存在 ----
+        start_m = _PERSONA_START_RE.search(sp)
+        if start_m is None:
+            return None
+
+        # ---- 策略 1：persona 结尾标记（取最后一个）----
+        end_positions = [m.end() for m in _PERSONA_END_RE.finditer(sp)]
+        if end_positions:
+            last_end = end_positions[-1]
+            # 结尾标记段落之后 = 段落内容结束处（第一个空行之后）；
+            # 无空行则找下一个 # 标题行之前；都没有则插到末尾。
+            blank = re.search(r"\n\n", sp[last_end:])
+            if blank is not None:
+                return last_end + blank.end()
+            next_heading = _HEADING_RE.search(sp, last_end)
+            if next_heading is not None:
+                return next_heading.start()
+            return len(sp)  # 结尾标记是最后一段 → 插到末尾
+
+        # ---- 策略 2：'# Persona' 段落结束（下一个一级标题前）----
+        h1 = _H1_RE.search(sp, start_m.end())
+        if h1 is not None:
+            return h1.start()
+        return len(sp)
+
+    def _inject_after_persona(self, system_prompt: str, block: str) -> str:
+        """将 skill 块插入 persona 之后；定位不到 persona 则回退末尾追加。"""
+        pos = self._find_persona_insert_pos(system_prompt)
+        if pos is None:
+            # 回退：末尾追加（原逻辑）
+            if system_prompt:
+                return system_prompt + f"\n{block}\n"
+            return block + "\n"
+        return system_prompt[:pos] + f"\n{block}\n" + system_prompt[pos:]
+
+    # ------------------------------------------------------------------
     # LLM 请求钩子：按身份注入隔离后的 skill 清单
     # ------------------------------------------------------------------
     @filter.on_llm_request()
@@ -365,13 +424,12 @@ class SkillGuardPlugin(Star):
                 or None,
             )
 
-            # 只注入 system_prompt 末尾（同原生注入方式）
+            # 只注入 system：显式插入到 persona 之后；定位不到 persona 回退末尾追加
             if not hasattr(request, "system_prompt"):
                 return
-            if request.system_prompt:
-                request.system_prompt += f"\n{block}\n"
-            else:
-                request.system_prompt = block + "\n"
+            request.system_prompt = self._inject_after_persona(
+                request.system_prompt or "", block
+            )
 
             logger.debug(
                 f"[skill_anchor] 已注入(system) admin={is_admin} "

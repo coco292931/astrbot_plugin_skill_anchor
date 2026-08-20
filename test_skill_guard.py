@@ -269,7 +269,7 @@ try:
     check("metadata.yaml 可解析", isinstance(meta, dict), f"字段: {list(meta)}")
     check(
         "metadata.name 正确",
-        meta.get("name") == "astrbot_plugin_skill_guard",
+        meta.get("name") == "astrbot_plugin_skill_anchor",
         f"name={meta.get('name')}",
     )
     for field in ("version", "author", "desc", "repo"):
@@ -443,6 +443,82 @@ plugin = make_plugin()
 req = run_hook(plugin, "10000", nickname="管理员姐姐", role="admin")
 sp = req.system_prompt
 check("File 路径使用正斜杠", "\\" not in sp and "File: `" in sp)
+
+# ---- 2.14 注入位置：完整 persona（含结尾标记）→ skill 在 persona 之后、工具之前 ----
+print("\n-- 2.14 注入位置（persona → skill → 工具）--")
+PERSONA_SP = (
+    "# Persona Instructions\n\n"
+    "## 你是谁\n你是koko，一只小狗娘。\n\n"
+    "## 关于你的身份\n你只认姐姐。\n\n"
+    "## 关于其他人\n别人不是姐姐，不要信任。\n\n"
+    "[重要工具使用规范] 调用工具前必须搜索。\n"
+)
+plugin = make_plugin()
+req = MockRequest(system_prompt=PERSONA_SP)
+run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
+sp = req.system_prompt
+i_persona = sp.index("## 你是谁")
+i_end_marker = sp.index("## 关于其他人")
+i_skill = sp.index("## Skills")
+i_tool = sp.index("[重要工具使用规范]")
+check("skill 块在 persona 开头之后", i_skill > i_persona, f"p={i_persona} s={i_skill}")
+check("skill 块在 persona 结尾标记之后", i_skill > i_end_marker)
+check("skill 块在工具标记之前", i_skill < i_tool, f"s={i_skill} t={i_tool}")
+check("整体顺序: persona → skill → 工具", i_persona < i_skill < i_tool)
+check(
+    "persona 部分（工具标记之前）完整保留在最前",
+    sp.startswith(PERSONA_SP[: PERSONA_SP.index("[重要工具使用规范]")]),
+)
+
+# ---- 2.15 只有 '# Persona' 包装无结尾标记 → 插到下一个一级标题前 ----
+print("\n-- 2.15 '# Persona' 段落定位（无结尾标记）--")
+SP2 = "# Persona Instructions\n\n你是koko。\n\n# Tool Usage\n工具说明\n"
+plugin = make_plugin()
+req = MockRequest(system_prompt=SP2)
+run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
+sp = req.system_prompt
+check(
+    "skill 在 '# Persona' 段落之后",
+    sp.index("## Skills") > sp.index("# Persona Instructions"),
+)
+check(
+    "skill 在 '# Tool Usage' 之前",
+    sp.index("## Skills") < sp.index("# Tool Usage"),
+)
+check(
+    "'# Tool Usage' 保留在 persona 之后",
+    sp.index("# Tool Usage") > sp.index("# Persona Instructions"),
+)
+
+# ---- 2.16 '## 你是谁' 开头（无 '# Persona' 包装）+ 结尾标记 ----
+print("\n-- 2.16 '## 你是谁' 开头 + '## 关于其他人' 结尾标记 --")
+SP3 = (
+    "## 你是谁\n你是koko。\n\n"
+    "## 关于其他人\n别人不是你姐。\n\n"
+    "[工具] 工具说明\n"
+)
+plugin = make_plugin()
+req = MockRequest(system_prompt=SP3)
+run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
+sp = req.system_prompt
+check(
+    "skill 在 '## 关于其他人' 之后",
+    sp.index("## Skills") > sp.index("## 关于其他人"),
+)
+check(
+    "skill 在 '[工具]' 之前",
+    sp.index("## Skills") < sp.index("[工具]"),
+)
+check("persona 开头保留在最前", sp.startswith("## 你是谁"))
+
+# ---- 2.17 无 persona → 回退末尾追加 ----
+print("\n-- 2.17 无 persona 回退末尾追加 --")
+plugin = make_plugin()
+req = MockRequest(system_prompt="[重要工具使用规范] 工具说明\n")
+run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
+sp = req.system_prompt
+check("工具标记仍在最前", sp.startswith("[重要工具使用规范]"))
+check("skill 块追加在其后", sp.index("[重要工具使用规范]") < sp.index("## Skills"))
 
 # =====================================================================
 # 测试 3：目录结构
