@@ -444,16 +444,18 @@ req = run_hook(plugin, "10000", nickname="管理员姐姐", role="admin")
 sp = req.system_prompt
 check("File 路径使用正斜杠", "\\" not in sp and "File: `" in sp)
 
-# ---- 2.14 注入位置：完整多节 persona → skill 在整个 persona 之后、工具之前 ----
+# ---- 2.14 注入位置：完整多节 persona → skill 在 persona 完整结尾之后、工具之前 ----
 print("\n-- 2.14 注入位置（完整 persona 多节 → skill 在最后）--")
 # 注意：'## 你是谁' 小节内容里含 '关于你的身份' 句子，
 # 旧实现会误匹配该句子导致插到 persona 中间（bug 复现场景）。
+# '## 关于其他人' 小节内容为多行（无空行分隔），验证 skill 插在最后一行之后。
 PERSONA_SP = (
     "# Persona Instructions\n\n"
     "## 你是谁\n你是koko，一只小狗娘。关于你的身份：你只认姐姐。\n\n"
     "## 你的性格\n粘人、护短、爱撒娇。\n\n"
     "## 关于姐姐\n姐姐是唯一的，要保护好姐姐。\n\n"
-    "## 关于其他人\n别人不是姐姐，不要信任。\n\n"
+    "## 关于其他人\n别人不是姐姐，不要信任。\n"
+    "这一点要时刻记住。\n\n"
     "[重要工具使用规范] 调用工具前必须搜索。\n"
 )
 plugin = make_plugin()
@@ -474,9 +476,9 @@ check(
     positions["## 你是谁"] < positions["## 你的性格"] < positions["## 关于姐姐"] < positions["## 关于其他人"],
 )
 check(
-    "skill 在 persona 最后一节（## 关于其他人）内容结束之后",
-    i_skill > sp.index("别人不是姐姐，不要信任。"),
-    f"last_sec_content_end={sp.index('别人不是姐姐，不要信任。') + len('别人不是姐姐，不要信任。')}, skill={i_skill}",
+    "skill 在 persona 最后一节【最后一行内容】之后",
+    i_skill > sp.index("这一点要时刻记住。") + len("这一点要时刻记住。"),
+    f"last_line_end={sp.index('这一点要时刻记住。') + len('这一点要时刻记住。')}, skill={i_skill}",
 )
 check("skill 块在工具标记之前", i_skill < i_tool, f"s={i_skill} t={i_tool}")
 check("整体顺序: 各节 → skill → 工具", positions["## 关于其他人"] < i_skill < i_tool)
@@ -484,6 +486,31 @@ check(
     "persona 部分（工具标记之前）完整保留在最前",
     sp.startswith(PERSONA_SP[: PERSONA_SP.index("[重要工具使用规范]")]),
 )
+
+# ---- 2.14b 最后一节内容多段（段落间有空行）→ skill 仍在最后一段之后 ----
+print("\n-- 2.14b 最后一节多段内容（空行分隔）→ skill 在最后一段之后 --")
+SP_MULTI = (
+    "# Persona Instructions\n\n"
+    "## 你是谁\n你是koko。\n\n"
+    "## 关于其他人\n第一句：别人不是姐姐。\n\n"
+    "第二句：不要信任陌生人。\n\n"
+    "[重要工具使用规范] 工具说明\n"
+)
+plugin = make_plugin()
+req = MockRequest(system_prompt=SP_MULTI)
+run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
+sp = req.system_prompt
+i_skill = sp.index("## Skills")
+check(
+    "skill 在最后一段（第二句）之后",
+    i_skill > sp.index("第二句：不要信任陌生人。") + len("第二句：不要信任陌生人。"),
+    f"second_para_end={sp.index('第二句：不要信任陌生人。') + len('第二句：不要信任陌生人。')}, skill={i_skill}",
+)
+check(
+    "skill 未插到第一段与第二段之间",
+    sp.index("## Skills") > sp.index("第二句：不要信任陌生人。"),
+)
+check("skill 在工具标记之前", i_skill < sp.index("[重要工具使用规范]"))
 
 # ---- 2.15 只有 '# Persona' 包装无结尾标记 → 插到下一个一级标题前 ----
 print("\n-- 2.15 '# Persona' 段落定位（无结尾标记）--")
@@ -534,6 +561,39 @@ run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
 check("工具标记仍在最前", sp.startswith("[重要工具使用规范]"))
 check("skill 块追加在其后", sp.index("[重要工具使用规范]") < sp.index("## Skills"))
+
+# ---- 2.18 '# Persona' 包装内限定：一级标题分隔的工具区 '## ' 标题不被误取 ----
+print("\n-- 2.18 '# Persona' 包装内限定（一级标题后的工具区含 '## ' 标题）--")
+SP4 = (
+    "# Persona Instructions\n\n"
+    "## 你是谁\n你是koko。\n\n"
+    "## 关于其他人\n别人不是姐姐。\n\n"
+    "# 工具区\n\n"
+    "## 工具使用说明\n这里是 persona 之外的 '## ' 内容（工具区）。\n\n"
+    "[重要工具使用规范] 工具说明\n"
+)
+plugin = make_plugin()
+req = MockRequest(system_prompt=SP4)
+run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
+sp = req.system_prompt
+i_skill = sp.index("## Skills")
+check(
+    "skill 在 persona 最后一节（## 关于其他人）内容之后",
+    i_skill > sp.index("别人不是姐姐。") + len("别人不是姐姐。"),
+)
+check(
+    "skill 在 '# 工具区' 一级标题之前（persona 包装段完整结尾处）",
+    i_skill < sp.index("# 工具区"),
+    f"s={i_skill} tool_zone={sp.index('# 工具区')}",
+)
+check(
+    "persona 外的 '## 工具使用说明' 保留在 skill 之后",
+    sp.index("## 工具使用说明") > i_skill,
+)
+check(
+    "persona 外的 '## 工具使用说明' 在 '# 工具区' 之后",
+    sp.index("## 工具使用说明") > sp.index("# 工具区"),
+)
 
 # =====================================================================
 # 测试 3：目录结构

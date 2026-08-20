@@ -338,11 +338,15 @@ class SkillGuardPlugin(Star):
     @staticmethod
     def _find_persona_insert_pos(system_prompt: str) -> int | None:
         """
-        定位 persona 全部内容结束后的插入位置；定位不到返回 None（回退末尾追加）。
+        定位 persona【完整结尾】后的插入位置；定位不到返回 None（回退末尾追加）。
 
         实现：找到 persona 内最后一个 '## ' 级别的小节标题（如 '## 关于其他人'），
-        在其内容结束后插入（内容结束 = 下一个 '# ' / '## ' 标题之前，或文本末尾）。
-        persona 无 '## ' 小节时：'# Persona' 段落结束 = 下一个一级标题（'# '）之前。
+        在其【全部内容结束后】（即 persona 最后一节最后一句话之后）插入：
+        - 下一个 '# ' / '## ' 标题之前（后面还有其他内容块）
+        - 下一个 '[' 方括号标记行之前（如 '[重要工具使用规范]'，工具区开始）
+        - 文本末尾
+        '# Persona' 包装时，'## ' 小节限定在包装段内（下一个一级标题前），
+        避免误取 persona 之后其他注入内容里的 '## ' 标题。
         """
         sp = system_prompt
 
@@ -351,22 +355,30 @@ class SkillGuardPlugin(Star):
         if start_m is None:
             return None
 
+        # ---- '# Persona' 包装时限定 persona 范围（到下一个一级标题前）----
+        if start_m.group(0).lstrip().startswith("# Persona"):
+            upper_m = _H1_RE.search(sp, start_m.end())
+            upper = upper_m.start() if upper_m is not None else len(sp)
+        else:
+            upper = len(sp)
+
         # ---- 找 persona 内最后一个 '## ' 小节标题 ----
         h2_matches = [
-            m for m in _H2_RE.finditer(sp) if m.start() >= start_m.start()
+            m for m in _H2_RE.finditer(sp)
+            if start_m.start() <= m.start() < upper
         ]
         if h2_matches:
             last_h2 = h2_matches[-1]
-            # 该小节内容结束（按优先级）：
-            #   1) 下一个 '# ' / '## ' 标题之前（后面还有标题）
-            #   2) 小节内容后的第一个空行之后（空行分隔后续内容，如工具标记）
+            # persona 完整结尾（按优先级）：
+            #   1) 下一个 '# ' / '## ' 标题之前（后面还有内容块）
+            #   2) 下一个 '[' 方括号标记行之前（如 '[重要工具使用规范]'，工具区开始）
             #   3) 文本末尾
             next_heading = _ANY_HEADING_RE.search(sp, last_h2.end())
             if next_heading is not None:
                 return next_heading.start()
-            blank = re.search(r"\n\n", sp[last_h2.end():])
-            if blank is not None:
-                return last_h2.end() + blank.end()
+            bracket = re.search(r"^\[", sp[last_h2.end():], re.MULTILINE)
+            if bracket is not None:
+                return last_h2.end() + bracket.start()
             return len(sp)
 
         # ---- persona 无 '## ' 小节：'# Persona' 段落结束（下一个一级标题前）----
