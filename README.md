@@ -1,0 +1,2 @@
+# astrbot_plugin_skill_anchor
+astrbot。外置skill注入插件
