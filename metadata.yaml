@@ -1,0 +1,6 @@
+name: "astrbot_plugin_skill_anchor"
+display_name: "Skill 隔离守卫 (skill_anchor)"
+desc: "按会话身份隔离注入 skill 清单：管理员/姐姐会话注入完整清单（含敏感 skill），非管理员会话只注入白名单 skill，替代原生全局 skill 注入。注入格式与原生 build_skills_prompt 完全一致。"
+version: "1.0.0"
+author: "coco"
+repo: "https://github.com/coco292931/astrbot_plugin_skill_anchor"

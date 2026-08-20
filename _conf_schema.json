@@ -1,0 +1,52 @@
+{
+    "enable": {
+        "description": "总开关",
+        "hint": "关闭后不注入 skill 清单（走 AstrBot 原生全局注入）。",
+        "type": "bool",
+        "default": true
+    },
+    "admin_id": {
+        "description": "管理员 user_id（回退判定用）",
+        "hint": "仅当 event.is_admin() 不可用/异常时作为回退判定：发送者 user_id 与该值匹配则按管理员（完整清单）处理。",
+        "type": "string",
+        "default": "2111565284"
+    },
+    "skill_roots": {
+        "description": "skill 根目录列表",
+        "hint": "扫描这些目录下的 skill（每个子目录含 SKILL.md）。管理员会话注入全部，非管理员会话只注入白名单。",
+        "type": "list",
+        "items": {
+            "type": "string",
+            "description": "技能根目录绝对路径"
+        },
+        "default": [
+            "/AstrBot/data/skills/",
+            "/AstrBot/data/koko/private/"
+        ]
+    },
+    "whitelist_skills": {
+        "description": "白名单 skill 名列表（非管理员会话可见）",
+        "hint": "非管理员/陌生人会话只注入这些 skill；管理员/姐姐会话不受限制。",
+        "type": "list",
+        "items": {
+            "type": "string",
+            "description": "skill 名称（目录名）"
+        },
+        "default": [
+            "file-management",
+            "koko-dream-archive"
+        ]
+    },
+    "max_desc_chars": {
+        "description": "单个 skill description 最大长度",
+        "hint": "超过该长度的 description 截断并追加省略号（…）。",
+        "type": "int",
+        "default": 200
+    },
+    "inject_enabled_override": {
+        "description": "覆盖 skills.json 的 active 状态",
+        "hint": "true=注入时忽略 active 状态，直接按白名单/完整清单注入；false=仅注入 skills.json 中 active 的 skill。",
+        "type": "bool",
+        "default": true
+    }
+}
