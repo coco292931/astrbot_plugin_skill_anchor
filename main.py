@@ -7,7 +7,7 @@ skill_anchor —— Skill 隔离守卫插件
 
 注入格式与原生 build_skills_prompt（astrbot/core/skills/skill_manager.py）完全一致：
 固定 "## Skills" 引导语 + "### Available skills" 清单 + "### Skill rules" 7 条规则。
-注入位置：system_prompt 末尾追加（同原生 req.system_prompt += build_skills_prompt）。
+注入位置：插到 '[重要工具使用规范]' 标记之前；找不到该标记则回退末尾追加。
 """
 
 import json
@@ -364,8 +364,16 @@ class SkillGuardPlugin(Star):
 
             if not hasattr(request, "system_prompt"):
                 return
-            if request.system_prompt:
-                request.system_prompt += f"\n{block}\n"
+            sp = request.system_prompt or ""
+            marker = "重要工具使用规范"
+            pos = sp.find(marker)
+            if pos != -1:
+                # 找到标记行首（标记可能不在行首，退回到行首）
+                line_start = sp.rfind("\n", 0, pos)
+                insert_at = line_start + 1 if line_start != -1 else pos
+                request.system_prompt = sp[:insert_at] + f"{block}\n" + sp[insert_at:]
+            elif sp:
+                request.system_prompt = sp + f"\n{block}\n"
             else:
                 request.system_prompt = block + "\n"
 

@@ -444,8 +444,8 @@ req = run_hook(plugin, "10000", nickname="管理员姐姐", role="admin")
 sp = req.system_prompt
 check("File 路径使用正斜杠", "\\" not in sp and "File: `" in sp)
 
-# ---- 2.14 注入位置：末尾追加，原始内容完整保留为前缀 ----
-print("\n-- 2.14 注入位置（末尾追加，原始内容完整保留）--")
+# ---- 2.14 注入位置：插到 '[重要工具使用规范]' 之前 ----
+print("\n-- 2.14 注入位置（插到 '[重要工具使用规范]' 之前）--")
 PERSONA_SP = (
     "# Persona Instructions\n\n"
     "## 你是谁\n你是koko，一只小狗娘。关于你的身份：你只认姐姐。\n\n"
@@ -460,26 +460,27 @@ req = MockRequest(system_prompt=PERSONA_SP)
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
 i_skill = sp.index("## Skills")
+i_tool = sp.index("[重要工具使用规范]")
 secs = ["## 你是谁", "## 你的性格", "## 关于姐姐", "## 关于其他人"]
 check(
-    "原始 system_prompt 完整保留为前缀",
-    sp.startswith(PERSONA_SP),
+    "skill 在 '[重要工具使用规范]' 之前",
+    i_skill < i_tool,
+    f"skill={i_skill} tool={i_tool}",
 )
 check(
     "persona 各节都在 skill 之前",
     all(sp.index(s) < i_skill for s in secs),
     f"positions={[sp.index(s) for s in secs]}, skill={i_skill}",
 )
-check(
-    "skill 追加在末尾（在工具标记之后）",
-    i_skill > sp.index("[重要工具使用规范]"),
-    f"skill={i_skill} tool={sp.index('[重要工具使用规范]')}",
-)
 check("persona 小节顺序未被破坏",
     sp.index("## 你是谁") < sp.index("## 你的性格") < sp.index("## 关于姐姐") < sp.index("## 关于其他人"))
+check(
+    "'[重要工具使用规范]' 仍完整保留",
+    "[重要工具使用规范] 调用工具前必须搜索。" in sp,
+)
 
-# ---- 2.14b 末尾追加（最后一节多段内容）----
-print("\n-- 2.14b 末尾追加（最后一节多段内容）--")
+# ---- 2.14b '[重要工具使用规范]' 存在（最后一节多段）→ skill 插到标记前 ----
+print("\n-- 2.14b '[重要工具使用规范]' 存在（最后一节多段）--")
 SP_MULTI = (
     "# Persona Instructions\n\n"
     "## 你是谁\n你是koko。\n\n"
@@ -493,76 +494,72 @@ run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
 i_skill = sp.index("## Skills")
 check(
-    "原始 system_prompt 完整保留为前缀",
-    sp.startswith(SP_MULTI),
-)
-check(
-    "skill 追加在末尾（在工具标记之后）",
-    i_skill > sp.index("[重要工具使用规范]"),
+    "skill 在 '[重要工具使用规范]' 之前",
+    i_skill < sp.index("[重要工具使用规范]"),
 )
 check(
     "skill 在最后一段（第二句）之后",
     i_skill > sp.index("第二句：不要信任陌生人。"),
 )
 
-# ---- 2.15 末尾追加（'# Persona' 包装 + '# Tool Usage'）----
-print("\n-- 2.15 末尾追加（'# Persona' 包装，含 '# Tool Usage'）--")
-SP2 = "# Persona Instructions\n\n你是koko。\n\n# Tool Usage\n工具说明\n"
+# ---- 2.15 '[重要工具使用规范]' 存在（'# Persona' 包装 + '# Tool Usage'）----
+print("\n-- 2.15 '[重要工具使用规范]' 存在（含 '# Tool Usage'）--")
+SP2 = "# Persona Instructions\n\n你是koko。\n\n# Tool Usage\n工具说明\n[重要工具使用规范] 工具规范\n"
 plugin = make_plugin()
 req = MockRequest(system_prompt=SP2)
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
 check(
-    "原始 system_prompt 完整保留为前缀",
-    sp.startswith(SP2),
-)
-check(
-    "skill 追加在末尾（在 '# Tool Usage' 之后）",
-    sp.index("## Skills") > sp.index("# Tool Usage"),
+    "skill 在 '[重要工具使用规范]' 之前",
+    sp.index("## Skills") < sp.index("[重要工具使用规范]"),
 )
 check(
     "skill 在 '# Persona' 之后",
     sp.index("## Skills") > sp.index("# Persona Instructions"),
 )
+check(
+    "'[重要工具使用规范]' 仍完整保留",
+    "[重要工具使用规范] 工具规范" in sp,
+)
 
-# ---- 2.16 末尾追加（'## 你是谁' 开头 + '[工具]' 标记）----
-print("\n-- 2.16 末尾追加（'## 你是谁' 开头 + '[工具]' 标记）--")
+# ---- 2.16 '[重要工具使用规范]' 存在（'## 你是谁' 开头）----
+print("\n-- 2.16 '[重要工具使用规范]' 存在（'## 你是谁' 开头）--")
 SP3 = (
     "## 你是谁\n你是koko。\n\n"
     "## 关于其他人\n别人不是你姐。\n\n"
-    "[工具] 工具说明\n"
+    "[重要工具使用规范] 工具说明\n"
 )
 plugin = make_plugin()
 req = MockRequest(system_prompt=SP3)
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
 check(
-    "原始 system_prompt 完整保留为前缀",
-    sp.startswith(SP3),
-)
-check(
-    "skill 追加在末尾（在 '[工具]' 之后）",
-    sp.index("## Skills") > sp.index("[工具]"),
+    "skill 在 '[重要工具使用规范]' 之前",
+    sp.index("## Skills") < sp.index("[重要工具使用规范]"),
 )
 check("persona 开头保留在最前", sp.startswith("## 你是谁"))
+check(
+    "'[重要工具使用规范]' 仍完整保留",
+    "[重要工具使用规范] 工具说明" in sp,
+)
 
-# ---- 2.17 无 persona → 末尾追加 ----
-print("\n-- 2.17 无 persona → 末尾追加 --")
+# ---- 2.17 无 '[重要工具使用规范]' → 回退末尾追加 ----
+print("\n-- 2.17 无 '[重要工具使用规范]' → 回退末尾追加 --")
 plugin = make_plugin()
-req = MockRequest(system_prompt="[重要工具使用规范] 工具说明\n")
+req = MockRequest(system_prompt="你是koko。\n")
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
-check("工具标记仍在最前", sp.startswith("[重要工具使用规范]"))
-check("skill 块追加在其后", sp.index("[重要工具使用规范]") < sp.index("## Skills"))
+check("原始内容保留在最前", sp.startswith("你是koko。"))
+check("skill 块追加在末尾", sp.index("## Skills") > sp.index("你是koko。"))
 
-# ---- 2.18 末尾追加（'# Persona' 包装 + 工具区含 '## ' 标题）----
-print("\n-- 2.18 末尾追加（'# Persona' 包装，工具区含 '## ' 标题）--")
+# ---- 2.18 '[重要工具使用规范]' 存在（工具区含 '## ' 标题）----
+print("\n-- 2.18 '[重要工具使用规范]' 存在（工具区含 '## ' 标题）--")
 SP4 = (
     "# Persona Instructions\n\n"
     "## 你是谁\n你是koko。\n\n"
     "## 关于其他人\n别人不是姐姐。\n\n"
     "# 工具区\n\n"
-    "## 工具使用说明\n这里是 persona 之外的 '## ' 内容（工具区）。\n\n"
+    "## 工具使用说明\n这里是工具区。\n\n"
     "[重要工具使用规范] 工具说明\n"
 )
 plugin = make_plugin()
@@ -570,26 +567,26 @@ req = MockRequest(system_prompt=SP4)
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
 i_skill = sp.index("## Skills")
+i_tool = sp.index("[重要工具使用规范]")
 check(
-    "原始 system_prompt 完整保留为前缀",
-    sp.startswith(SP4),
-)
-check(
-    "skill 追加在末尾（在工具区所有内容之后）",
-    i_skill > sp.index("[重要工具使用规范]"),
-    f"skill={i_skill} tool={sp.index('[重要工具使用规范]')}",
+    "skill 在 '[重要工具使用规范]' 之前",
+    i_skill < i_tool,
+    f"skill={i_skill} tool={i_tool}",
 )
 check(
     "persona 内容（## 关于其他人）在 skill 之前",
     sp.index("## 关于其他人") < i_skill,
 )
+check(
+    "'[重要工具使用规范]' 仍完整保留",
+    "[重要工具使用规范] 工具说明" in sp,
+)
 
-# ---- 2.19 [用户历史记忆] 已在末尾 → skill 同样追加在最末 ----
-print("\n-- 2.19 [用户历史记忆] 已存在 → skill 追加在最末 --")
+# ---- 2.19 '[重要工具使用规范]' + [用户历史记忆] 共存 → skill 在规范前 ----
+print("\n-- 2.19 '[重要工具使用规范]' + [用户历史记忆] 共存 → skill 在规范前 --")
 SP_MEM = (
     "# Persona Instructions\n\n"
     "## 你是谁\n你是koko。\n\n"
-    "## 关于其他人\n别人不是姐姐。\n\n"
     "[重要工具使用规范] 工具说明\n"
     "[用户历史记忆] 该用户(10086)的重要信息：1. 喜欢猫猫 (重要度:5)\n"
 )
@@ -597,14 +594,16 @@ plugin = make_plugin()
 req = MockRequest(system_prompt=SP_MEM)
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
+i_skill = sp.index("## Skills")
+i_tool = sp.index("[重要工具使用规范]")
 check(
-    "原始 system_prompt 完整保留为前缀",
-    sp.startswith(SP_MEM),
+    "skill 在 '[重要工具使用规范]' 之前",
+    i_skill < i_tool,
+    f"skill={i_skill} tool={i_tool}",
 )
 check(
-    "skill 追加在最末（在 [用户历史记忆] 之后）",
-    sp.index("## Skills") > sp.index("[用户历史记忆]"),
-    f"skill={sp.index('## Skills')} mem={sp.index('[用户历史记忆]')}",
+    "'[重要工具使用规范]' 和 '[用户历史记忆]' 均完整保留",
+    "[重要工具使用规范]" in sp and "[用户历史记忆]" in sp,
 )
 
 # =====================================================================
