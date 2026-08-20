@@ -46,6 +46,9 @@ SKILLS_CONFIG_FILENAME = "skills.json"
 _SKILL_NAME_RE = re.compile(r"^[\w.-]+$")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1F\x7F]")
 
+# 记忆注入标记（toolbox 的 [用户历史记忆] 始终在最后，skill 必须在它之前）
+_MEMORY_MARKER = "[用户历史记忆]"
+
 # persona 段落定位标记（用于把 skill 块显式插到 persona 之后）
 _PERSONA_START_RE = re.compile(r"^#\s*Persona(\s|$)|^##\s*你是谁", re.MULTILINE)
 # '## ' 二级小节标题（persona 各节，如 '## 你是谁' / '## 关于其他人'）
@@ -388,13 +391,23 @@ class SkillGuardPlugin(Star):
         return len(sp)
 
     def _inject_after_persona(self, system_prompt: str, block: str) -> str:
-        """将 skill 块插入 persona 之后；定位不到 persona 则回退末尾追加。"""
+        """将 skill 块插入 persona 之后、[用户历史记忆] 之前；定位不到 persona 则回退记忆前（或末尾）追加。"""
+        # 记忆标记位置：skill 必须严格在记忆之前
+        mem_pos = system_prompt.find(_MEMORY_MARKER)
+
         pos = self._find_persona_insert_pos(system_prompt)
         if pos is None:
-            # 回退：末尾追加（原逻辑）
+            # 无 persona：追加到记忆标记之前，或末尾追加
+            if mem_pos != -1:
+                return system_prompt[:mem_pos] + f"{block}\n" + system_prompt[mem_pos:]
             if system_prompt:
                 return system_prompt + f"\n{block}\n"
             return block + "\n"
+
+        # 有 persona：插到 persona 结尾处，但不越过记忆标记
+        if mem_pos != -1 and pos > mem_pos:
+            pos = mem_pos
+
         return system_prompt[:pos] + f"\n{block}\n" + system_prompt[pos:]
 
     # ------------------------------------------------------------------
