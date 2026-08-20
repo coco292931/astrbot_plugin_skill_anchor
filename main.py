@@ -48,10 +48,10 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1F\x7F]")
 
 # persona 段落定位标记（用于把 skill 块显式插到 persona 之后）
 _PERSONA_START_RE = re.compile(r"^#\s*Persona(\s|$)|^##\s*你是谁", re.MULTILINE)
-# persona 结尾标记（persona 的收尾段落标题/语句，匹配整行）
-_PERSONA_END_RE = re.compile(r"^##\s*关于[^\n]*|关于你的身份", re.MULTILINE)
-# 任意 # 标题行（用于确定段落边界）
-_HEADING_RE = re.compile(r"^#+", re.MULTILINE)
+# '## ' 二级小节标题（persona 各节，如 '## 你是谁' / '## 关于其他人'）
+_H2_RE = re.compile(r"^## ", re.MULTILINE)
+# 任意 '# ' / '## ' 标题（不含 '### '，用于确定小节内容结束边界）
+_ANY_HEADING_RE = re.compile(r"^#{1,2} ", re.MULTILINE)
 # 一级标题（'# ' 单井号，用于 '# Persona' 段落结束定位）
 _H1_RE = re.compile(r"^#[^#]", re.MULTILINE)
 
@@ -338,12 +338,11 @@ class SkillGuardPlugin(Star):
     @staticmethod
     def _find_persona_insert_pos(system_prompt: str) -> int | None:
         """
-        定位 persona 部分结束后的插入位置；定位不到返回 None（回退末尾追加）。
+        定位 persona 全部内容结束后的插入位置；定位不到返回 None（回退末尾追加）。
 
-        策略 1：找 persona 结尾标记（'## 关于其他人' / '关于你的身份' 等，取最后一个），
-                插入到结尾标记段落之后（下一个 # 标题行之前）。
-        策略 2：找到 '# Persona' 段落但无结尾标记，插入到下一个一级标题（'# '）之前
-                （persona 内容用 '##' 子标题，一级标题属于其他段落）。
+        实现：找到 persona 内最后一个 '## ' 级别的小节标题（如 '## 关于其他人'），
+        在其内容结束后插入（内容结束 = 下一个 '# ' / '## ' 标题之前，或文本末尾）。
+        persona 无 '## ' 小节时：'# Persona' 段落结束 = 下一个一级标题（'# '）之前。
         """
         sp = system_prompt
 
@@ -352,21 +351,25 @@ class SkillGuardPlugin(Star):
         if start_m is None:
             return None
 
-        # ---- 策略 1：persona 结尾标记（取最后一个）----
-        end_positions = [m.end() for m in _PERSONA_END_RE.finditer(sp)]
-        if end_positions:
-            last_end = end_positions[-1]
-            # 结尾标记段落之后 = 段落内容结束处（第一个空行之后）；
-            # 无空行则找下一个 # 标题行之前；都没有则插到末尾。
-            blank = re.search(r"\n\n", sp[last_end:])
-            if blank is not None:
-                return last_end + blank.end()
-            next_heading = _HEADING_RE.search(sp, last_end)
+        # ---- 找 persona 内最后一个 '## ' 小节标题 ----
+        h2_matches = [
+            m for m in _H2_RE.finditer(sp) if m.start() >= start_m.start()
+        ]
+        if h2_matches:
+            last_h2 = h2_matches[-1]
+            # 该小节内容结束（按优先级）：
+            #   1) 下一个 '# ' / '## ' 标题之前（后面还有标题）
+            #   2) 小节内容后的第一个空行之后（空行分隔后续内容，如工具标记）
+            #   3) 文本末尾
+            next_heading = _ANY_HEADING_RE.search(sp, last_h2.end())
             if next_heading is not None:
                 return next_heading.start()
-            return len(sp)  # 结尾标记是最后一段 → 插到末尾
+            blank = re.search(r"\n\n", sp[last_h2.end():])
+            if blank is not None:
+                return last_h2.end() + blank.end()
+            return len(sp)
 
-        # ---- 策略 2：'# Persona' 段落结束（下一个一级标题前）----
+        # ---- persona 无 '## ' 小节：'# Persona' 段落结束（下一个一级标题前）----
         h1 = _H1_RE.search(sp, start_m.end())
         if h1 is not None:
             return h1.start()

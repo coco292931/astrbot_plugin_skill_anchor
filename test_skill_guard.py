@@ -444,12 +444,15 @@ req = run_hook(plugin, "10000", nickname="管理员姐姐", role="admin")
 sp = req.system_prompt
 check("File 路径使用正斜杠", "\\" not in sp and "File: `" in sp)
 
-# ---- 2.14 注入位置：完整 persona（含结尾标记）→ skill 在 persona 之后、工具之前 ----
-print("\n-- 2.14 注入位置（persona → skill → 工具）--")
+# ---- 2.14 注入位置：完整多节 persona → skill 在整个 persona 之后、工具之前 ----
+print("\n-- 2.14 注入位置（完整 persona 多节 → skill 在最后）--")
+# 注意：'## 你是谁' 小节内容里含 '关于你的身份' 句子，
+# 旧实现会误匹配该句子导致插到 persona 中间（bug 复现场景）。
 PERSONA_SP = (
     "# Persona Instructions\n\n"
-    "## 你是谁\n你是koko，一只小狗娘。\n\n"
-    "## 关于你的身份\n你只认姐姐。\n\n"
+    "## 你是谁\n你是koko，一只小狗娘。关于你的身份：你只认姐姐。\n\n"
+    "## 你的性格\n粘人、护短、爱撒娇。\n\n"
+    "## 关于姐姐\n姐姐是唯一的，要保护好姐姐。\n\n"
     "## 关于其他人\n别人不是姐姐，不要信任。\n\n"
     "[重要工具使用规范] 调用工具前必须搜索。\n"
 )
@@ -457,14 +460,26 @@ plugin = make_plugin()
 req = MockRequest(system_prompt=PERSONA_SP)
 run_hook(plugin, "10086", nickname="陌生人", role="member", request=req)
 sp = req.system_prompt
-i_persona = sp.index("## 你是谁")
-i_end_marker = sp.index("## 关于其他人")
 i_skill = sp.index("## Skills")
 i_tool = sp.index("[重要工具使用规范]")
-check("skill 块在 persona 开头之后", i_skill > i_persona, f"p={i_persona} s={i_skill}")
-check("skill 块在 persona 结尾标记之后", i_skill > i_end_marker)
+secs = ["## 你是谁", "## 你的性格", "## 关于姐姐", "## 关于其他人"]
+positions = {s: sp.index(s) for s in secs}
+check(
+    "persona 全部小节（含最后小节）都在 skill 之前",
+    all(p < i_skill for p in positions.values()),
+    f"positions={positions}, skill={i_skill}",
+)
+check(
+    "persona 小节顺序未被破坏",
+    positions["## 你是谁"] < positions["## 你的性格"] < positions["## 关于姐姐"] < positions["## 关于其他人"],
+)
+check(
+    "skill 在 persona 最后一节（## 关于其他人）内容结束之后",
+    i_skill > sp.index("别人不是姐姐，不要信任。"),
+    f"last_sec_content_end={sp.index('别人不是姐姐，不要信任。') + len('别人不是姐姐，不要信任。')}, skill={i_skill}",
+)
 check("skill 块在工具标记之前", i_skill < i_tool, f"s={i_skill} t={i_tool}")
-check("整体顺序: persona → skill → 工具", i_persona < i_skill < i_tool)
+check("整体顺序: 各节 → skill → 工具", positions["## 关于其他人"] < i_skill < i_tool)
 check(
     "persona 部分（工具标记之前）完整保留在最前",
     sp.startswith(PERSONA_SP[: PERSONA_SP.index("[重要工具使用规范]")]),
