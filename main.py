@@ -7,7 +7,7 @@ skill_anchor —— Skill 隔离守卫插件
 
 注入格式与原生 build_skills_prompt（astrbot/core/skills/skill_manager.py）完全一致：
 固定 "## Skills" 引导语 + "### Available skills" 清单 + "### Skill rules" 7 条规则。
-注入位置：system_prompt 末尾追加（与原生 req.system_prompt += build_skills_prompt 一致）。
+注入位置：persona 完整结束之后、[用户历史记忆] 之前；定位不到 persona 则回退到记忆前（或末尾）追加。
 """
 
 import json
@@ -44,6 +44,18 @@ SKILLS_CONFIG_FILENAME = "skills.json"
 
 _SKILL_NAME_RE = re.compile(r"^[\w.-]+$")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1F\x7F]")
+
+# 记忆注入标记（toolbox 的 [用户历史记忆] 始终在最后，skill 必须在它之前）
+_MEMORY_MARKER = "[用户历史记忆]"
+
+# persona 段落定位标记（用于把 skill 块显式插到 persona 之后）
+_PERSONA_START_RE = re.compile(r"^#\s*Persona(\s|$)|^##\s*你是谁", re.MULTILINE)
+# '## ' 二级小节标题（persona 各节，如 '## 你是谁' / '## 关于其他人'）
+_H2_RE = re.compile(r"^## ", re.MULTILINE)
+# 任意 '# ' / '## ' 标题（不含 '### '，用于确定小节内容结束边界）
+_ANY_HEADING_RE = re.compile(r"^#{1,2} ", re.MULTILINE)
+# 一级标题（'# ' 单井号，用于 '# Persona' 段落结束定位）
+_H1_RE = re.compile(r"^#[^#]", re.MULTILINE)
 
 
 # ----------------------------------------------------------------------
@@ -323,13 +335,75 @@ class SkillGuardPlugin(Star):
         return bool(user_id) and (user_id == admin_id)
 
     # ------------------------------------------------------------------
+    # 注入位置：persona 之后、[用户历史记忆] 之前
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _find_persona_insert_pos(system_prompt: str) -> int | None:
+        """
+        定位 persona【完整结尾】后的插入位置；定位不到返回 None（回退记忆前或末尾追加）。
+
+        找 persona 内最后一个 '## ' 小节，在其全部内容结束后插入：
+        1) 下一个 '# '/'## ' 标题之前
+        2) 下一个 '[' 方括号标记行之前
+        3) 文本末尾
+        '# Persona' 包装时，'## ' 小节范围限定在包装段内（下一个一级标题前）。
+        """
+        sp = system_prompt
+
+        start_m = _PERSONA_START_RE.search(sp)
+        if start_m is None:
+            return None
+
+        if start_m.group(0).lstrip().startswith("# Persona"):
+            upper_m = _H1_RE.search(sp, start_m.end())
+            upper = upper_m.start() if upper_m is not None else len(sp)
+        else:
+            upper = len(sp)
+
+        h2_matches = [
+            m for m in _H2_RE.finditer(sp)
+            if start_m.start() <= m.start() < upper
+        ]
+        if h2_matches:
+            last_h2 = h2_matches[-1]
+            next_heading = _ANY_HEADING_RE.search(sp, last_h2.end())
+            if next_heading is not None:
+                return next_heading.start()
+            bracket = re.search(r"^\[", sp[last_h2.end():], re.MULTILINE)
+            if bracket is not None:
+                return last_h2.end() + bracket.start()
+            return len(sp)
+
+        h1 = _H1_RE.search(sp, start_m.end())
+        if h1 is not None:
+            return h1.start()
+        return len(sp)
+
+    def _inject_skill_block(self, system_prompt: str, block: str) -> str:
+        """skill 块插入 persona 之后、[用户历史记忆] 之前；定位不到 persona 则回退记忆前（或末尾）追加。"""
+        mem_pos = system_prompt.find(_MEMORY_MARKER)
+
+        pos = self._find_persona_insert_pos(system_prompt)
+        if pos is None:
+            if mem_pos != -1:
+                return system_prompt[:mem_pos] + f"{block}\n" + system_prompt[mem_pos:]
+            if system_prompt:
+                return system_prompt + f"\n{block}\n"
+            return block + "\n"
+
+        if mem_pos != -1 and pos > mem_pos:
+            pos = mem_pos
+
+        return system_prompt[:pos] + f"\n{block}\n" + system_prompt[pos:]
+
+    # ------------------------------------------------------------------
     # LLM 请求钩子：按身份注入隔离后的 skill 清单
     # ------------------------------------------------------------------
     @filter.on_llm_request()
     async def on_llm_request(
         self, event: AstrMessageEvent, request: ProviderRequest, *args, **kwargs
     ) -> None:
-        """在请求发给 LLM 之前，按会话身份注入 skill 清单（只注入 system，末尾追加）。"""
+        """在请求发给 LLM 之前，按会话身份注入 skill 清单（只注入 system）。"""
         try:
             if not bool(self._cfg("enable", True)):
                 return
@@ -364,10 +438,9 @@ class SkillGuardPlugin(Star):
 
             if not hasattr(request, "system_prompt"):
                 return
-            if request.system_prompt:
-                request.system_prompt += f"\n{block}"
-            else:
-                request.system_prompt = block
+            request.system_prompt = self._inject_skill_block(
+                request.system_prompt or "", block
+            )
 
             logger.debug(
                 f"[skill_anchor] 已注入(system) admin={is_admin} "
